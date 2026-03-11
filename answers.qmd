@@ -1,0 +1,616 @@
+---
+title: "Difference-in-differences and the EITC"
+subtitle: "Problem set 4 --- PMAP 8521, SEMESTER YEAR"
+author: "YOUR NAME HERE"  # Replace with your actual name
+date: "DATE GOES HERE"  # Replace with the date
+date-format: "long"
+bibliography: references.bib
+format:
+  html:
+    toc: true
+    knitr:
+      opts_chunk: 
+        dev: "ragg_png"
+        dpi: 300
+        fig-align: "center"
+  typst:
+    toc: true
+    toc-title: Contents
+    citeproc: true
+    output-file: PREFIX_eval-04-diff-diff-1.pdf
+    pdf-standard: ua-1
+    callout-appearance: minimal
+    include-in-header: 
+      text: |
+        // TOC stuff
+        // Make the title centered and slightly smaller than a full heading
+        #show outline: it => {
+          show heading: it => align(center, text(size: 0.75em, it))
+          it
+        }
+    include-before-body: 
+      text: |
+        // Color links with pink-ish red from viridis plasma: 
+        // viridisLite::viridis(8, option = "inferno", begin = 0.1, end = 0.9)[4]
+        #show link: set text(fill: rgb("a52c60"))
+
+        // Keep track of previous heading levels
+        #let last-heading-level = state("last-heading-level", 0)
+
+        // Add page breaks before all level 1 headings
+        // Add page breaks before level 2 headings that don't come after level 1
+        #show heading: it => {
+          context {
+            let prev-level = last-heading-level.get()
+
+            if it.level == 1 {
+              pagebreak(weak: true)
+              last-heading-level.update(1)
+            } else if it.level == 2 {
+              if prev-level != 1 {
+                pagebreak(weak: true)
+              }
+              last-heading-level.update(2)
+            } else {
+              last-heading-level.update(it.level)
+            }
+          }
+          it
+        }
+  pdf:
+    toc: true
+  docx:
+    toc: true
+---
+
+```{r}
+#| label: setup
+#| include: false
+
+# Set some default chunk options
+knitr::opts_chunk$set(
+  fig.width = 6,
+  fig.height = 6 * 0.618,
+  fig.retina = 3,
+  out.width = "80%"
+)
+```
+
+# Overview
+
+In 1996, Nada Eissa and Jeffrey B. Liebman [published a now-classic study on the effect of the Earned Income Tax Credit (EITC) on employment](http://darp.lse.ac.uk/papersdb/Eissa-Liebman_(QJE96).pdf) [@EissaLiebman:1996]. The EITC is a special tax credit for low income workers that changes depending on (1) how much a family earns (the lowest earners and highest earners don't receive a huge credit, as the amount received phases in and out), and (2) the number of children a family has (more kids = higher credit). See [this brief explanation](https://www.cbpp.org/research/federal-tax/policy-basics-the-earned-income-tax-credit) for an interactive summary of how the EITC works.
+
+Eissa and Liebman's study looked at the effects of the EITC on women's employment and wages after it was initially substantially expanded in 1986. The credit was expanded substantially again in 1993. For this problem set, you'll measure the causal effect of this 1993 expansion on the employment levels and annual income for women.
+
+A family must have children in order to qualify for the EITC, which means the presence of 1 or more kids in a family assigns low-income families to the EITC program (or "treatment"). We have annual data on earnings from 1991–1996, and because the expansion of EITC occurred in 1993, we also have data both before and after the expansion. This treatment/control before/after situation allows us to use a difference-in-differences approach to identify the causal effect of the EITC.
+
+The dataset I've provided (`data/eitc.dta`) is a Stata data file containing more than 13,000 observations. This is non-experimental data—the data comes from the US Census's Current Population Survey (CPS) and includes all women in the CPS sample between the ages of 20–54 with less than a high school education between 1991–1996. There are 11 variables:
+
+| Variable   | Definition                                                                          |
+|:-----------|:------------------------------------------------------------------------------------|
+| `state`    | The woman's state of residence[^state-codes]                                        |
+| `year`     | The tax year                                                                        |
+| `urate`    | The unemployment rate in the woman's state of residence                             |
+| `children` | The number of children the woman has                                                |
+| `nonwhite` | Binary variable indicating if the woman is not white (1 = Hispanic/Black)           |
+| `finc`     | The woman's family income in 1997 dollars                                           |
+| `earn`     | The woman's personal income in 1997 dollars                                         |
+| `age`      | The woman's age                                                                     |
+| `ed`       | The number of years of education the woman has                                      |
+| `work`     | Binary variable indicating if the woman is employed (1 = employed)                  |
+| `unearn`   | The woman's family income minus her personal income, in *thousands* of 1997 dollars |
+
+[^state-codes]: These numbers are [US Census state codes](https://cps.ipums.org/cps-action/variables/STATECENSUS).
+
+The code below loads the data. **You don't need to modify anything in this chunk of code---you only need to run it.**
+
+```{r}
+#| label: load-libraries-data
+#| warning: false
+#| message: false
+
+library(tidyverse)
+library(haven) # For loading data from Stata
+library(parameters)
+
+# Load EITC data
+eitc <- read_stata("data/eitc.dta") |>
+  # case_when() is a fancy version of ifelse() that takes multiple conditions
+  # and outcomes. Here, we make a new variable named children_cat(egorical)
+  # with three different levels: 0, 1, and 2+
+  mutate(
+    children_cat = case_when(
+      children == 0 ~ "0",
+      children == 1 ~ "1",
+      children >= 2 ~ "2+"
+    )
+  )
+```
+
+# Task 1: Exploratory data analysis
+
+It's always a good idea to get a feel for your data before doing any analysis. 
+
+Calculate and visualize the differences in employment status, personal income, race, education, and age.
+
+## Work (`work`)
+
+Use `group_by()` and `summarize()` to calculate the proportion of women who are employed across these the three levels of children (*hint*: `work` is a binary 0/1 variable; if you calculate the average with `mean(work)`, you'll get the proportion). Recreate these results:
+
+```{r}
+#| label: recreate-me-work-table
+#| echo: false
+#| ref.label: children-averages-work
+#| opts.label: true
+```
+
+::: {.callout-tip title="Answer"}
+
+```{r}
+#| label: children-averages-work
+eitc |>
+  group_by(children_cat) |>
+  summarize(avg_work = mean(work))
+```
+
+:::
+
+Run the code chunk below to see a plot.
+
+```{r fig.path="images/"}
+#| label: recreate-me-fig-work-plot
+#| echo: false
+#| ref.label: fig-averages-work
+#| opts.label: true
+```
+
+Use `ggplot()`, `stat_summary()`, and `labs()` in the chunk below to re-create the plot above. Add some sort of useful caption to the figure using the `fig-cap` chunk option. (*Hint*: see Problem Set 3—both your own work and the answer key—and the diff-in-diff example at the class website for examples of using `stat_summary()`.) If you want to match the image exactly, use `fig-width: 5` and `fig-height: 2.5` in the chunk options.
+
+::: {.callout-tip title="Answer"}
+
+```{r}
+#| label: fig-averages-work
+#| fig-cap: Proportion of women employed across number of children
+#| fig-alt: |
+#|   Point range chart showing mean proportion of women employed on the
+#|   y-axis across three categories of children (0, 1, 2+) on the x-axis.
+#|   Error bars show 95% confidence intervals. Women with no children have
+#|   the highest employment rate, followed by those with one child, with
+#|   women having two or more children showing the lowest employment rate.
+#| fig-width: 5
+#| fig-height: 2.5
+
+ggplot(eitc, aes(x = children_cat, y = work)) +
+  stat_summary(
+    geom = "pointrange",
+    fun.data = "mean_se",
+    fun.args = list(mult = 1.96)
+  ) +
+  labs(x = "Number of children", y = "Percent employed")
+```
+
+:::
+
+
+## Personal income (`earn`)
+
+Go through the same process to calculate the average personal income across counts of children.
+
+::: {.callout-tip title="Answer"}
+
+```{r}
+#| label: children-averages-earn
+eitc |>
+  group_by(children_cat) |>
+  summarize(avg_earn = mean(earn))
+```
+
+:::
+
+::: {.callout-tip title="Answer"}
+
+```{r}
+#| label: fig-averages-earn
+#| fig-cap: Average personal income across number of children
+#| fig-alt: |
+#|   Point range chart showing mean personal income in 1997 dollars on the
+#|   y-axis across three categories of children (0, 1, 2+) on the x-axis.
+#|   Error bars show 95% confidence intervals. Personal income decreases
+#|   as the number of children increases, with women having no children
+#|   earning substantially more than those with one or two or more children.
+#| fig-width: 5
+#| fig-height: 2.5
+
+ggplot(eitc, aes(x = children_cat, y = earn)) +
+  stat_summary(
+    geom = "pointrange",
+    fun.data = "mean_se",
+    fun.args = list(mult = 1.96)
+  ) +
+  labs(x = "Number of children", y = "Personal earnings")
+```
+
+:::
+
+## Race (`nonwhite`)
+
+Go through the same process to calculate the proportion of Hispanic/Black women across counts of children.
+
+::: {.callout-tip title="Answer"}
+
+```{r}
+#| label: children-averages-nonwhite
+eitc |>
+  group_by(children_cat) |>
+  summarize(avg_earn = mean(nonwhite))
+```
+
+:::
+
+::: {.callout-tip title="Answer"}
+
+```{r}
+#| label: fig-averages-nonwhite
+#| fig-cap: Proportion of Hispanic/Black women across number of children
+#| fig-alt: |
+#|   Point range chart showing the proportion of women who are Hispanic or
+#|   Black on the y-axis across three categories of children (0, 1, 2+) on
+#|   the x-axis. Error bars show 95% confidence intervals. Women with two or
+#|   more children are substantially more likely to be non-white compared to
+#|   those with no children, with a clear increasing trend across child
+#|   categories.
+#| fig-width: 5
+#| fig-height: 2.5
+
+ggplot(eitc, aes(x = children_cat, y = nonwhite)) +
+  stat_summary(
+    geom = "pointrange",
+    fun.data = "mean_se",
+    fun.args = list(mult = 1.96)
+  ) +
+  labs(x = "Number of children", y = "Percent Hispanic/Black")
+```
+
+:::
+
+## Education (`ed`)
+
+Go through the same process to calculate the average years of education across counts of children.
+
+::: {.callout-tip title="Answer"}
+
+```{r}
+#| label: children-averages-ed
+eitc |>
+  group_by(children_cat) |>
+  summarize(avg_earn = mean(ed))
+```
+
+:::
+
+::: {.callout-tip title="Answer"}
+
+```{r}
+#| label: fig-averages-ed
+#| fig-cap: Average years of education across number of children
+#| fig-alt: |
+#|   Point range chart showing mean years of education on the y-axis across
+#|   three categories of children (0, 1, 2+) on the x-axis. Error bars show
+#|   95% confidence intervals. Differences across groups are modest, with
+#|   women having no children averaging slightly fewer years of education
+#|   than those with one or two or more children.
+#| fig-width: 5
+#| fig-height: 2.5
+
+ggplot(eitc, aes(x = children_cat, y = ed)) +
+  stat_summary(
+    geom = "pointrange",
+    fun.data = "mean_se",
+    fun.args = list(mult = 1.96)
+  ) +
+  labs(x = "Number of children", y = "Years of education")
+```
+
+:::
+
+## Age (`age`)
+
+Go through the same process to calculate the average age across counts of children.
+
+::: {.callout-tip title="Answer"}
+
+```{r}
+#| label: children-averages-age
+eitc |>
+  group_by(children_cat) |>
+  summarize(avg_earn = mean(age))
+```
+
+:::
+
+::: {.callout-tip title="Answer"}
+
+```{r}
+#| label: fig-averages-age
+#| fig-cap: Average age across number of children
+#| fig-alt: |
+#|   Point range chart showing mean age in years on the y-axis across three
+#|   categories of children (0, 1, 2+) on the x-axis. Error bars show 95%
+#|   confidence intervals. Women with no children are on average older than
+#|   those with children. Among mothers, those with two or more children are
+#|   slightly younger on average than those with one child.
+#| fig-width: 5
+#| fig-height: 2.5
+
+ggplot(eitc, aes(x = children_cat, y = age)) +
+  stat_summary(
+    geom = "pointrange",
+    fun.data = "mean_se",
+    fun.args = list(mult = 1.96)
+  ) +
+  labs(x = "Number of children", y = "Age")
+```
+
+:::
+
+## Summary
+
+**Describe your findings in a paragraph.** How do these women differ depending on the number of kids they have?
+
+::: {.callout-tip title="Answer"}
+
+There are substantial differences between the demographics and outcomes of the women in this data, depending on how many kids they have. Those without children are more likely to be employed, have higher family and personal incomes, more likely to be white, and be older. Curiously, those without children have slightly less education than those that do, but only a difference of 0.4 years (or 5 months). Among those with kids, those who have two kids tend to be far less likely to be employed, have less family and personal income, are far more likely to be Black or Hispanic, and are slightly younger than those who have one child.
+
+:::
+
+# Task 2: Parallel trends
+
+## Create treatment variables
+
+Create a a copy of `eitc` and use `mutate()` to add two new columns:
+
+- A variable for treatment status named `any_kids` (should be TRUE or 1 if `children` > 0) 
+- A variable for the timing named `after_1993` (should be TRUE or 1 if `year` > 1993)
+
+::: {.callout-tip title="Hint!"}
+
+Remember you can use the following syntax for creating a new binary variable based on a test:
+
+```r
+# Use ifelse()
+new_dataset <- original_dataset |>
+  mutate(new_variable = ifelse(some_column > some_number, TRUE, FALSE))
+
+# Shorter way that defaults to TRUE/FALSE
+new_dataset <- original_dataset |>
+  mutate(new_variable = some_column > some_number)
+```
+
+:::
+
+::: {.callout-tip title="Answer"}
+
+```{r}
+#| label: make-treatment-variables
+
+eitc_clean <- eitc |>
+  mutate(
+    any_kids = children >= 1,
+    after_1993 = year > 1993
+  )
+```
+
+:::
+
+## Check pre- and post-treatment trends
+
+Create a new dataset named `eitc_by_year` that's based on `eitc_clean`. Calculate the proportion of employed women (`work`) in each year in both the treated and untreated groups (`any_kids`). (*Hint*: use `group_by()` and `summarize()`, and group by both `year` and `any_kids`.) Recreate these results:
+
+```{r}
+#| label: recreate-me-treatment-trends
+#| echo: false
+#| ref.label: pre-treatment-trends
+#| opts.label: true
+```
+
+::: {.callout-tip title="Answer"}
+
+```{r}
+#| label: pre-treatment-trends
+#| message: false
+eitc_by_year <- eitc_clean |>
+  group_by(year, any_kids) |>
+  summarize(avg_work = mean(work))
+eitc_by_year
+```
+
+:::
+
+Run the code chunk below to see a plot.
+
+```{r fig.path="images/"}
+#| label: recreate-me-fig-pre-treatment-trends
+#| echo: false
+#| ref.label: fig-pre-treatment-trends
+#| opts.label: true
+```
+
+Use `ggplot()`, `geom_line()`, and `geom_point()` to plot `eitc_by_year` using colored lines and points, with year on the x-axis and average employment on the y-axis. Add a vertical line at 1994 (hint: use `geom_vline(xintercept = SOMETHING)`). If you want to match the image exactly, use `fig-width: 5.5` and `fig-height: 2.5` in the chunk options.
+
+::: {.callout-tip title="Answer"}
+
+```{r}
+#| label: fig-pre-treatment-trends
+#| fig-cap: Pre-treatment trends for women with and without children
+#| fig-alt: |
+#|   Line chart with points showing the average proportion of women employed
+#|   (y-axis) from 1991 to 1996 (x-axis), with separate colored lines for
+#|   women with children and women without children. A vertical line marks
+#|   1994. Before 1994, both groups follow similar declining trends through
+#|   1992–1993. After 1994, the lines diverge: employment rises for women
+#|   with children while remaining relatively flat for those without,
+#|   consistent with an effect of the 1993 EITC expansion.
+#| fig-width: 5.5
+#| fig-height: 2.5
+
+ggplot(eitc_by_year, aes(x = year, y = avg_work, color = any_kids)) +
+  geom_line() +
+  geom_point() +
+  geom_vline(xintercept = 1994) +
+  labs(x = "Year", y = "Average proportion employed", color = "Any kids")
+```
+
+:::
+
+**Do the pre-treatment trends appear to be similar?**
+
+::: {.callout-tip title="Answer"}
+The pre-treatment trends appear to be similar. Those without kids are more likely to work, but both groups saw a decrease in the proportion employed in 1992 and 1993, and a corresponding increase in 1994. The two groups only diverge after 1994, ostensibly because of the expansion of the EITC.
+:::
+
+# Task 3: Difference-in-differences
+
+## Diff-in-diff by hand-ish
+
+Use `eitc_clean` and calculate the average proportion of employed women in the treated and untreated groups before and after the EITC expansion. (Hint: group by `any_kids` and `after_1993` and find the average of `work`.) 
+
+```{r}
+#| label: diff-diff-by-hand
+#| message: false
+
+# Calculate average of work across any_kids and after_1993
+eitc_diff_diff_means <- eitc_clean |> 
+  group_by(any_kids, after_1993) |> 
+  summarize(avg_work = mean(work))
+
+cell_A <- eitc_diff_diff_means |> 
+  filter(any_kids == FALSE, after_1993 == FALSE) |> 
+  pull(avg_work)
+
+cell_B <- eitc_diff_diff_means |> 
+  filter(any_kids == FALSE, after_1993 == TRUE) |> 
+  pull(avg_work)
+
+cell_C <- eitc_diff_diff_means |> 
+  filter(any_kids == TRUE, after_1993 == FALSE) |> 
+  pull(avg_work)
+
+cell_D <- eitc_diff_diff_means |> 
+  filter(any_kids == TRUE, after_1993 == TRUE) |> 
+  pull(avg_work)
+
+diff_in_diff <- (cell_D - cell_C) - (cell_B - cell_A)
+```
+
+Calculate the difference-in-differences estimate given these numbers. Recall from class that each cell has a letter (A, B, C, and D), and that the diff-in-diff estimate represents a special combination of these cells. The ["Diff-in-diff by hand" section of the example](https://evalsp26.classes.andrewheiss.com/example/diff-in-diff.html#diff-in-diff-by-hand) will be useful here.
+
+|                    | Before 1993            | After 1993             | Difference                      |
+|:-------------------|:----------------------:|:----------------------:|:-------------------------------:|
+| Women with no kids | `{r} round(cell_A, 4)` | `{r} round(cell_B, 4)` | `{r} round(cell_B - cell_A, 4)` |
+| Women with kids    | `{r} round(cell_C, 4)` | `{r} round(cell_D, 4)` | `{r} round(cell_D - cell_C, 4)` |
+| Difference         |                        |                        | `{r} round(diff_in_diff, 4)`    |
+
+**What is the difference-in-difference estimate? Discuss the result.** (Hint, these numbers are percents, so you can multiply them by 100 to make it easier to interpret. For instance, if the diff-in-diff number is 0.15 (it's not), you could say that the EITC caused the the proportion of mothers in the workplace to increase by 15 percentage points.)
+
+::: {.callout-tip title="Answer"}
+
+The diff-in-diff estimate here shows that the EITC had a causal effect of increasing the labor force participation of mothers with children by nearly 5 percentage points. 
+
+:::
+
+
+## Diff-in-diff with regression
+
+Create a regression model named `model_simple` to find the diff-in-diff estimate of the effect of the EITC on employment (`work`) using the `eitc_clean` data (*hint*: remember that you'll be using an interaction term). Use `model_parameters()` to show at the results.
+
+```{r}
+#| label: model-simple
+
+model_simple <- lm(
+  work ~ any_kids + after_1993 + any_kids * after_1993,
+  data = eitc_clean
+)
+model_parameters(model_simple, verbose = FALSE)
+```
+
+**How does this value compare with what you found by hand? What is the advantage of doing this instead of making a 2x2 table?**
+
+**Is this result statistically significant? Is it substantially significant?**
+
+::: {.callout-tip title="Answer"}
+
+The coefficient for the `any_kidsTRUE:after_1993TRUE` term should be identical to the number you got from the 2x2 table. The advantages of calculating this value through regression are (1) it's easier and faster, (2) you can more easily get measures of uncertainty and significance, and (3) you can include other control variables.
+
+The effect is statistically significant (p = 0.006), and it's probably substantively significant. Five percentage points feels big.
+
+:::
+
+## Diff-in-diff with regression and controls
+
+Create a new regression model named `model_complex` with demographic controls. Eissa and Liebman used the following in their original study:
+
+- `unearn`: Non-labor income (family income minus personal earnings)
+- `children`: Number of children
+- `nonwhite`: Race
+- `age`: Age
+- `age^2`: Age squared
+- `ed`: Education
+- `ed^2`: Education squared
+
+For the squared terms, you'll either need to make new variables in your dataset with `mutate()`, or include the squared terms in your model like `I(age^2)`^[The `I()` lets you define math operations in the regression model.], like `y ~ x + z + I(z^2)`. These are squared because age and education might have a nonlinear relationship with employment, where higher values might have a greater effect.
+
+Display the results with `model_parameters()`.
+
+```{r}
+#| label: model-complex
+
+model_complex <- lm(
+  work ~ any_kids + after_1993 + any_kids * after_1993 +
+    unearn + children + nonwhite + age + I(age^2) + ed + I(ed^2),
+  data = eitc_clean
+)
+model_parameters(model_complex, verbose = FALSE)
+```
+
+**Does the treatment effect change? Is it statistically significant? Substantially significant? Interpret these findings.**
+
+::: {.callout-tip title="Answer"}
+After controlling for demographics, the diff-in-diff estimate is now 0.06, which is a little larger than it was in the simple model, since the control variables helped filter out or isolate some of the variation in `work`.
+:::
+
+# Task 4: Robustness check with fake treatment
+
+To make sure this effect isn't driven by any pre-treatment trends, we can pretend that the EITC was expanded in 1991 (starting in 1992) instead of 1993.
+
+Create a new dataset named `eitc_fake_treatment` based on `eitc_clean` that does the following:
+
+- Only includes data from 1991–1993 (hint: use `filter()`). 
+- Includes a new binary before/after indicator named `after_1991` (hint: `year >= 1992`). 
+
+Use regression to find the diff-in-diff estimate of the EITC on `work` (don't worry about adding demographic controls).
+
+::: {.callout-tip title="Answer"}
+
+```{r}
+#| label: fake-treatment
+
+eitc_fake_treatment <- eitc_clean |>
+  filter(year < 1994) |>
+  mutate(after_1991 = year >= 1992)
+
+model_fake_treatment <- lm(
+  work ~ any_kids + after_1991 + any_kids * after_1991,
+  data = eitc_fake_treatment
+)
+model_parameters(model_fake_treatment, verbose = FALSE)
+```
+
+:::
+
+**Is there a significant diff-in-diff effect? What does this mean for pre-treatment trends?**
+
+::: {.callout-tip title="Answer"}
+If we pretend the EITC expansion happened in 1991 instead of 1993, we don't see any significant diff-in-diff effect. The coefficient for the interaction term is -0.01, which seems to *decrease* workforce participation a tiny bit, but the p-value is 0.678 (which is really high), so there's likely no significant effect. There are no preexisting trends that could be driving the results.
+:::
+
+# References
