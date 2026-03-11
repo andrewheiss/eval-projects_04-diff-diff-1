@@ -17,7 +17,7 @@ format:
     toc: true
     toc-title: Contents
     citeproc: true
-    output-file: PREFIX_eval-04-diff-diff-1.pdf
+    output-file: PREFIX_03-problem-set.pdf
     pdf-standard: ua-1
     callout-appearance: minimal
     include-in-header: 
